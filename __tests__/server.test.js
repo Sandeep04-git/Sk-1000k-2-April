@@ -24,6 +24,12 @@
 
 const request = require('supertest');
 const http = require('http');
+
+// Spy on console.log BEFORE requiring server.js so we can capture
+// the startup message emitted by the server.listen() callback.
+// The spy calls through to the real console.log (no mockImplementation)
+// so output remains visible during test runs.
+const startupLogSpy = jest.spyOn(console, 'log');
 const server = require('../server');
 
 /* ================================================================
@@ -367,36 +373,16 @@ describe('Server Lifecycle', () => {
     testServer.listen(0, '127.0.0.1');
   });
 
-  it('should log the correct startup message', (done) => {
-    // Arrange: Spy on console.log BEFORE re-requiring the module
-    // so we can capture the log call from the listen callback
-    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-
-    // Close the main server to free port 3000 for the fresh require.
-    // server.js hardcodes port 3000, so it must be available.
-    server.close(() => {
-      // Reset the module cache so require() loads a fresh copy of server.js
-      jest.resetModules();
-
-      // Act: Re-require triggers server.listen(3000, ...) and
-      // its callback calls console.log with the startup message
-      const freshServer = require('../server');
-
-      // The listen callback fires asynchronously after TCP binding completes.
-      // Use setTimeout to allow the event loop to process the callback.
-      setTimeout(() => {
-        // Assert: Verify the exact startup message was logged
-        expect(logSpy).toHaveBeenCalledWith(
-          'Server running at http://127.0.0.1:3000/'
-        );
-
-        // Cleanup: Close the fresh server and restore console.log
-        freshServer.close(() => {
-          logSpy.mockRestore();
-          done();
-        });
-      }, 200);
-    });
+  it('should log the correct startup message', () => {
+    // Assert: The startup message was emitted by the server.listen()
+    // callback when server.js was initially required at the top of
+    // this test file. The startupLogSpy was set up before the require
+    // to capture this call, avoiding the need to re-require the module
+    // (which would risk EADDRINUSE port conflicts from supertest
+    // keep-alive connections).
+    expect(startupLogSpy).toHaveBeenCalledWith(
+      'Server running at http://127.0.0.1:3000/'
+    );
   });
 });
 
@@ -455,6 +441,10 @@ describe('Error Handling', () => {
  * have already closed the server.
  * ================================================================ */
 afterAll((done) => {
+  // Restore the module-level console.log spy to prevent interference
+  // with any subsequent test files or Jest teardown operations.
+  startupLogSpy.mockRestore();
+
   if (server.listening) {
     server.close(done);
   } else {
